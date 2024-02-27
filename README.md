@@ -72,7 +72,7 @@ spec:
   project: default
   source:
     path: argoCD/
-    repoURL: https://github.com/naturalett/continuous-delivery
+    repoURL: https://github.com/francisco-gutierrez-bfg/grafana_prometheus
     targetRevision: main
   syncPolicy:
     automated:
