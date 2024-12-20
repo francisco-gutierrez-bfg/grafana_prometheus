@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-grafana-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts # Agregue repo local si asi lo desea desde el folder "k8s-logging"
+    chart: loki-stack
+    targetRevision: latest
+    helm:
+      valueFiles:
+        - infra/k8s-logging/values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: grafana-loki
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

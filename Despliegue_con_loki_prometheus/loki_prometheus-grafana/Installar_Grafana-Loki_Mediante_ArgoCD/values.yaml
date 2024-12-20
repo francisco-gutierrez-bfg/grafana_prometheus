@@ -1,0 +1,97 @@
+loki:
+  enabled: true
+  isDefault: true
+  url: http://{{(include "loki.serviceName" .)}}:{{ .Values.loki.service.port }}
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 45
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 45
+  datasource:
+    jsonData: "{}"
+    uid: ""
+
+  # Habilitar persistencia de volumen para Loki con un path especifico
+  persistence:
+    enabled: true
+    storageClassName: "local-path" # Optional
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    volumeClaimTemplate:
+      spec:
+        volumeMode: Filesystem
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: "local-path"
+        volumeSource:
+          hostPath:
+            path: /opt/loki/data # Ruta en el servidor
+            type: DirectoryOrCreate
+
+promtail:
+  enabled: true
+  config:
+    logLevel: info
+    serverPort: 3101
+    clients:
+      - url: http://{{ .Release.Name }}:3100/loki/api/v1/push
+
+grafana:
+  enabled: true
+  sidecar:
+    datasources:
+      label: ""
+      labelValue: ""
+      enabled: true
+      maxLines: 1000
+  image:
+    tag: 10.3.3
+  service:
+    #type: NodePort
+    type: ClusterIP  ## <-- Cambiar a LoadBalancer o NodePort dependiendo de las necesidades
+
+  # Habilitar persistencia de volumen para Grafana con un path especifico
+  persistence:
+    enabled: true
+    storageClassName: "local-path" # Optional
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    volumeClaimTemplate:
+      spec:
+        volumeMode: Filesystem
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: "local-path"
+        volumeSource:
+          hostPath:
+            path: /data/grafana/data # Ruta en el servidor
+            type: DirectoryOrCreate
+
+# Desplegar el Ingress:
+  # Configurar Ingress NGINX para Grafana con puerto 3000
+#  ingress:
+#    enabled: true
+#    annotations:
+#      nginx.ingress.kubernetes.io/rewrite-target: /
+#      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+#    hosts:
+#      - grafana.dev.ganamovil.bg.com.bo
+#    paths:
+#      - path: /
+#        pathType: Prefix
+#        backend:
+#          service:
+#            name: {{ include "grafana.fullname" . }}
+#            port:
+#              number: 3000

@@ -1,0 +1,18 @@
+Despliegue Grafana y Loki:
+#########################
+Para desplegar la App en ArgoCD existen dos opciones:
+   a) En caso de que desee desplegar desde código alojado en GitOps, copie el folder "k8s-logging" al respectivo folder en GitOps
+      /!\ Tenga en cuenta que en este caso deberá hacer un cambio en el archivo "values.yaml", específicamente en la línea "repoURL: https://grafana.github.io/helm-charts"
+      esta deberá ser reemplazada por "repoURL: https://gitops_url/k8s_logging" ya que en este caso hemos alojado el chart en nuestro repo de GitOps.
+   b) Copie el archivo "k8s-logging_app.yaml" y el archivo "values.yaml" al repo de GitOps a su respectivo destino para que ArgoCD pueda utilizarlo.
+      /!\ Tenga en cuenta que en este caso la línea "repoURL: https://grafana.github.io/helm-charts" se mantendrá ya que los charts que se utilizarán
+      corresponden a los alojados en "https://grafana.github.io/helm-charts"
+      Solo ejecute el manifiesto del app "k8s_logging_app" en ArgoCD, este descargará los parámetros necesarios y desplegará la solución. 
+
+Despliegue Prometheus:
+######################
+/!\ Después de habler desplagado Grafana y Loki, verifique que los pods se encuentren corriendo completamente.
+
+Para desplegar Prometheus ejecute los siguientes pasos:
+1- Copie el archivo de despliegue de app llamado "Prometheus.yaml" en GitOps.
+2- Ejecute el despliegue de la APP en ArgoCD.

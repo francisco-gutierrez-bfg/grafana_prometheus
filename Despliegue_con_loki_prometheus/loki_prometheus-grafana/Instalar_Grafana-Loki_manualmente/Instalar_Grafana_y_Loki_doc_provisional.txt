@@ -1,0 +1,346 @@
+Instalar Grafana y Loki para Seguimiento de Logs
+################################################
+En una arquitectura de microservicios, la supervisión y el registro son esenciales para realizar un seguimiento de varios componentes. 
+Kubernetes genera una gran cantidad de registros, y administrarlos de manera eficaz es clave para garantizar el buen estado de un cluster. 
+Grafana Loki es una solución de registro altamente eficiente que se integra perfectamente con Grafana para visualizar registros, lo que le permite consultar y explorar registros de múltiples fuentes en un solo lugar.
+
+Prerrequisitos
+==============
+Antes de comenzar, asegúrese de tener:
+
+- Un clúster de Kubernetes en funcionamiento
+- Helm instalado en su sistema
+- kubectl configurado para interactuar con su clúster
+
+Pasos para configurar Grafana Loki en Kubernetes
+Una vez que tenga los requisitos previos establecidos, sigua los pasos a continuación para configurar Grafana, Loki y Prometheus.
+
+Paso 1: Ejecute el siguiente comando para desplegar loki y grafana:
+ helm repo add grafana https://grafana.github.io/helm-charts
+ helm repo update
+ kubectl create namespace loki-stack
+ helm upgrade --install loki grafana/loki-stack --set grafana.enabled=true, prometheus.enabled=true -n loki-stack --create-namespace
+ Activando persistencioa:
+  helm upgrade --install loki grafana/loki-stack --set grafana.enabled=true,prometheus.enabled=true,persistence.enabled=true -n loki-stack --create-namespace
+ 
+Si no tiene configurada una StorageClass o desea usar un PV manualmente definido, cree un PersistentVolume y un PersistentVolumeClaim personalizados.
+
+
+
+PersistentVolume
+----------------
+Archivo YAML para el PV:
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: loki-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path  # Ensure this matches your PVC's StorageClass
+  hostPath:
+    path: /opt/data/loki
+
+PersistentVolumeClaim
+Archivo YAML para el PVC:
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-pvc
+  namespace: loki-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path  # Replace with your existing StorageClass
+  resources:
+    requests:
+      storage: 10Gi
+
+
+Aplique ambos manifiestos:
+
+kubectl apply -f persistent-volume.yaml
+kubectl apply -f persistent-volume-claim.yaml
+
+Luego, actualice el comando Helm para usar este PVC:
+
+helm upgrade --install loki grafana/loki-stack --set persistence.enabled=true --set persistence.existingClaim=loki-pvc --namespace=loki-stack
+
+Verificar el despliegue
+Verifique que los Pods y el almacenamiento persistente estén funcionando correctamente:
+
+kubectl get pods -n <namespace>
+kubectl get pvc -n <namespace>
+kubectl get pv -n <namespace>
+
+
+Paso opcional al punto 1: Puede personalizar los valores de configuración del chart de Helm
+Antes de implementar Loki, es posible que desee personalizar algunos de los valores predeterminados.
+Este paso es especialmente importante si desea configurar otras funciones avanzadas como el almacenamiento persistente.
+
+---
+
+loki:
+  enabled: true
+  isDefault: true
+  url: http://{{(include "loki.serviceName" .)}}:{{ .Values.loki.service.port }}
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 45
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 45
+  datasource:
+    jsonData: "{}"
+    uid: ""
+
+  # Enable persistent volume for Loki with a specific hostPath
+  persistence:
+    enabled: true
+    storageClassName: "local-path" # Opcional
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    volumeClaimTemplate:
+      spec:
+        volumeMode: Filesystem
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: "local-path"
+        volumeSource:
+          hostPath:
+            path: /data/loki/ # Ruta en el servidor
+            type: DirectoryOrCreate
+
+promtail:
+  enabled: true
+  config:
+    logLevel: info
+    serverPort: 3101
+    clients:
+      - url: http://{{ .Release.Name }}:3100/loki/api/v1/push
+
+grafana:
+  enabled: true
+  sidecar:
+    datasources:
+      label: ""
+      labelValue: ""
+      enabled: true
+      maxLines: 1000
+  image:
+    tag: 10.3.3
+  service:
+    #type: NodePort
+    type: ClusterIP  ## <-- Cambiar a LoadBalancer o NodePort dependiendo de las necesidades
+
+  # Enable persistent volume for Grafana with a specific hostPath
+  persistence:
+    enabled: true
+    storageClassName: "local-path" # Optional
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    volumeClaimTemplate:
+      spec:
+        volumeMode: Filesystem
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: "local-path"
+        volumeSource:
+          hostPath:
+            path: /opt/grafana/data # Ruta en el servidor
+            type: DirectoryOrCreate
+
+---
+Nota: Puede obtener un archivo de valores más extenso ejecutando el siguiente comando.
+       helm show values grafana/loki-stack > loki-custom-values.yaml
+
+Implemente el servicio para exponer Grafana:
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-grafana
+  namespace: loki-stack
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app.kubernetes.io/name: grafana
+
+Puede exponer el servicio de grafana por un port forward de manera provisional:
+
+kubectl port-forward svc/loki-grafana 3000:3000 -n loki-stack
+
+Puntos clave en la configuración personalizada:
+
+- Loki está habilitado y configurado con sondas de preparación y actividad para verificar el estado.
+- Promtail está habilitado para reenviar registros desde los nodos de Kubernetes a Loki.
+- Grafana está habilitado con un servicio NodePort para permitir el acceso a la interfaz de usuario de Grafana desde fuera del clúster.
+- Prometheus , Filebeat y Logstash están explícitamente deshabilitados. <<=== (Este se agregará manualmente más adelante)
+
+Paso 2: Implementar el stack de Loki con valores personalizados
+Después de editar el archivo de valores "loki-values.yaml", ya está listo para implementar el stack de Loki. 
+Use el siguiente comando para instalar o actualizar la versión de Helm:
+ helm upgrade --install --values loki-custom-values.yaml loki grafana/loki-stack -n grafana-loki --create-namespace
+
+Este comando:
+
+- Implementa los componentes Loki , Promtail y Grafana .
+- Desactiva los componentes Prometheus , Filebeat y Logstash según la configuración.
+- Crea un espacio de nombres grafana-loki implementa todos los componentes dentro de este espacio de nombres.
+
+Paso 3: Acceda a Grafana y configure la fuente de datos
+Una vez que el gráfico de Helm se haya implementado correctamente, es momento de acceder a Grafana y verificar que todo esté funcionando correctamente.
+
+Primero, verifique los pods en el grafana-loki spacio de nombres para asegurarse de que todo esté funcionando:
+
+$ kubectl get pods -n grafana-loki
+
+Output de ejemplo:
+------------------
+NAME                                READY         STATUS         RESTARTS     AGE 
+loki -0                                1 / 1      Running         0           19 m 
+loki - grafana -567 d65596c - gvt5q    2 / 2      Running         0           17 m 
+loki - promtail -8 jng6                1 / 1      Running         0           19 m 
+loki - promtail - hb6x2                1 / 1      Running         0           19 m
+
+Exponga el servicio de grafana para poder sr alcanzado desde el navegador web:
+
+Opción 1:
+En caso de haber desplegado como "Type = ClusterIP":
+ kubectl port-forward svc/loki-grafana 3000:80 -n grafana-loki
+
+En caso de ingress, por favor despliegue el ingress necesario
+
+Paso4: Obtenga las credenciales de Grafana:
+Obtenga el usuario:
+ kubectl get secret loki-grafana -n grafana-loki -o jsonpath="{.data.admin-user}" | base64 --decode
+
+Obtenga la clave:
+ kubectl get secret loki-grafana -n grafana-loki -o jsonpath="{.data.admin-password}" | base64 --decode         
+
+Paso5: Acceda a grafana
+
+Según su configuración, acceda de la siguiente manera:
+ - http://localhost:3000
+ - http://IP:3000
+
+Paso6: Crear dashboard
+Importe un dashboard a partir de un ID:
+18494
+12019
+
+
+Paso7: Agregar prometheus
+
+Puede instalar Prometheus en Kubernetes utilizando el Helm chart oficial:
+
+Agregue el repositorio de Helm para Prometheus si no lo ha hecho antes:
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+Instale Prometheus:
+
+ helm install prometheus prometheus-community/prometheus -n grafana-loki
+
+Esto instalará Prometheus en el namespace por defecto. Para especificar un namespace, use la opción -n <namespace>.
+
+2. Configurar Prometheus como fuente de datos en Grafana
+Una vez que Prometheus esté en ejecución, debe agregarlo como fuente de datos en Grafana:
+
+Acceda a Grafana en su navegador.
+Vaya a Settings (Configuraciones) y seleccione Data Sources (Fuentes de datos).
+Haga clic en Add data source (Agregar fuente de datos).
+Seleccione Prometheus como tipo de fuente de datos.
+
+En el campo URL, ingrese la dirección de servicio de Prometheus en Kubernetes, que típicamente será:
+
+http://prometheus-server.<namespace>.svc.cluster.local
+
+Reemplace namespace con el namespace en el que instaló Prometheus.
+En esta ocasión no requiere puerto ya que está preconfigurado para trabajar sobre puerto 80
+
+Ejemplo:
+ http://prometheus-server.grafana-loki.svc.cluster.local
+
+Haga clic en Save & Test (Guardar y Probar) para verificar la conexión.
+
+
+Paso8: Instalar Jaeger para trazas:
+
+Ejecutar el manifiesto de despliegue de jaeger llamado "jaeger.yaml"
+Este se desplegará en el nameaspace "loki-stack"  , si desea cambiarlo, solo edite el archivo y modifique la linea de namespace.
+
+Exponga el servicio provisionalmente para acceder el GUI o cree el servicio/ingress para una exposición permanente.
+
+Ejemplo:
+En ese ejemplo se expondrá jaeger por medio de un port forward:
+kubectl port-forward -n loki-stack \
+    $(kubectl get pods -n loki-stack -l=app="jaeger" -o name) --address 0.0.0.0 16686:16686
+
+Agregue un datasource de Jaeger desde grafana y configure la URL:
+
+ http://jaeger.<namespace>.svc.cluster.local:16686
+
+Ejemplo:
+http://jaeger.loki-stack.svc.cluster.local:16686
+
+
+Paso 8: Crear Dashboards
+------------------------
+Importe un dashboard a partir de un ID:
+18283
+
+Kubernetes logs:
+19780
+18494
+
+Este Id extrae logs de apps:
+13639
+
+Estadisticas mas completas:
+15759
+14623  <<-- Muy cpmpleto -->>
+
+Estadisticas por nodo:
+8171   <<--- Importante para Kubenrtees --->>
+
+Estadisticas de despliegues:
+741
+
+
+Si tiene un load balancer como metallb:
+
+Cree un servicio de tipo LoadBalancer tal como se muestra a continuación:
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-grafana
+  namespace: loki-stack
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app.kubernetes.io/name: grafana

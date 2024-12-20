@@ -1,0 +1,297 @@
+Instalar Helm v3.x o superior:
+==============================
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+chmod 700 get_helm.sh
+./get_helm.sh
+
+Habilitar métricas:
+===================
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+kubectl get deployment metrics-server -n kube-system
+
+/!\ Nota: Si sale algún error relacionado a validación TLS, por favor ejecute el siguiente procedimiento:
+
+kubectl edit deployment metrics-server -n kube-system
+
+Agregue los siguientes argumentos bajo la sección "args" el el bloque de código "container spec":
+
+- --kubelet-insecure-tls
+- --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+
+Debería quedar similar al siguiente ejemplo:
+
+---
+    spec:
+      containers:
+      - args:
+        - --cert-dir=/tmp
+        - --secure-port=10250
+        - --kubelet-use-node-status-port
+        - --metric-resolution=15s
+        - --kubelet-insecure-tls  # <== Nueva Línea
+        - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP # <=== Nueva Línea
+---
+
+
+Agregue los repos necesarios de Helm para instalar los paquetes
+===============================================================
+Grafana:
+ helm repo add grafana https://grafana.github.io/helm-charts
+ helm repo update
+
+Prometheus:
+ helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+ helm repo update
+
+
+Crear directorio en todos los nodos:
+====================================
+mkdir -p /opt/grafana/data
+
+Crear StorageClass:
+===================
+El manifiesto se encuentra almacenado en el folder llamado "storage-class" pero a continuación podrá ver el contenido del manifiesto:
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+parameters:
+  type: local
+
+
+Crear PV: (opcional)
+=========
+El manifiesto se encuentra almacenado en el folder llamado "pv.yaml" pero a continuación podrá ver el contenido del manifiesto:
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana-pv
+spec:
+  storageClassName: local-storage
+  capacity:
+    storage: 30Gi # Modifique el tamaño basado en sus preferencias
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/opt/grafana/data"
+
+
+Crear PVC:(opcional)
+==========
+El manifiesto se encuentra almacenado en el folder llamado "pvc.yaml" pero a continuación podrá ver el contenido del manifiesto:
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafanapvc
+  namespace: loki-stack
+spec:
+  storageClassName: local-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi # Modifique el tamaño basado en sus preferencias
+
+
+
+Nota:
+=====
+La construcción del storageclass, PV y el PVC debe ser ejecutada estrictamente en el siguiente orden:
+1- Crear el storageclass
+EL PV y el PVC son opcionales en caso de que quiera personalizar aún más el proceso de despliegue.
+
+
+Instalar Stack de Grafana con Loki y Prometheus:
+================================================
+
+kubectl create namespace loki-stack
+
+Install Grafana:
+----------------
+Opción 1:
+Instalar Grafana y Loki e instalar por separado Prometheus.
+
+Instalar Grafana y Loki:
+........................
+helm upgrade --install loki grafana/loki-stack --set grafana.enabled=true,persistence.enabled=true, -n loki-stack --create-namespace
+
+helm install loki grafana/loki-stack -n loki-stack \
+  --set grafana.enabled=true \
+  --set persistence.size=10Gi \
+  --set persistence.storageClass=local-storage
+
+Instalar Prometheus:
+....................
+helm install prometheus prometheus-community/prometheus -n loki-stack \
+  --set persistence.enabled=true \
+  --set persistence.size=10Gi \
+  --set persistence.storageClass=local-storage
+
+Exponga el servicio:
+--------------------
+
+export POD_NAME=$(kubectl get pods --namespace loki-stack -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/instance=prometheus" -o jsonpath="{.items[0].metadata.name}")
+kubectl --namespace loki-stack port-forward $POD_NAME 9090
+
+Opción 2:
+Instalar todo el bundle, es decir, instalar Grafana, Loki y Prometheus.
+No habría necesidad de configurar los datasources ya que son agregados automáticamente.
+
+helm upgrade --install loki grafana/loki-stack --set grafana.enabled=true,prometheus.enabled=true,persistence.enabled=true,persistence.size=10Gi,persistence.storageClass=local-storage -n loki-stack --create-namespace
+
+
+Exponga el servicio de grafana para poder ser alcanzado desde el navegador web:
+===============================================================================
+
+Opción 1:
+---------
+En caso de haber desplegado como "Type = ClusterIP":
+ kubectl port-forward svc/loki-grafana 3000:80 -n grafana-loki
+
+En caso de exponer el servicio para ser alcanzado temporalmente desde las IP de los nodos del cluster:
+====================================================================================================== 
+Modifique el servicio actualmente expuesto: loki-grafana
+ kubectl edit svc loki-grafana -n loki-stack
+
+Cambie la línea:
+ "type: ClusterIP" a "type: NodePort"
+
+Guarde cambios oprimiendo las teclas: 
+ ESC:wq!  (ESC se orpime y se libera inmediatamente)
+
+Opción 2:
+---------
+En caso de ingress controller (NGINX, KONG, etc) y/o load balancer (MetalLB, NGINX LB,etc), por favor despliegue el load balancer y el ingress necesario.
+
+
+Obtenga las credenciales de Grafana:
+====================================
+Obtenga el usuario:
+ kubectl get secret loki-grafana -n loki-stack -o jsonpath="{.data.admin-user}" | base64 --decode; echo
+
+Obtenga la clave:
+ kubectl get secret loki-grafana -n loki-stack -o jsonpath="{.data.admin-password}" | base64 --decode; echo        
+
+Acceda a grafana
+================
+Según su configuración, acceda de la siguiente manera:
+ - http://localhost:3000
+ - http://IP:3000
+
+
+Crear dashboard
+===============
+Importe un dashboard a partir de un ID:
+18494
+12019
+
+
+Troubleshoot:
+Si algún pod muestra error, por favor borrarlo y el sistema lo recreará
+
+
+Despliegue Jaeger para trazas:
+==============================
+El manifiesto se encuentra almacenado en el folder llamado "jaeger.yaml" pero a continuación podrá ver el contenido del manifiesto:
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loki-stack
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: loki-stack
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:1.45.0
+        ports:
+        - containerPort: 16686 # Jaeger UI port
+        - containerPort: 6831  # UDP port for traces
+        - containerPort: 6832  # UDP port for traces
+        - containerPort: 14268 # HTTP port for traces
+        - containerPort: 14250 # GRPC port for traces
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: loki-stack
+  labels:
+    app: jaeger
+spec:
+  selector:
+    app: jaeger
+  ports:
+  - name: http
+    protocol: TCP
+    port: 16686
+    targetPort: 16686
+  - name: grpc
+    protocol: TCP
+    port: 14250
+    targetPort: 14250
+  - name: thrift
+    protocol: TCP
+    port: 14268
+    targetPort: 14268
+  - name: udp1
+    protocol: UDP
+    port: 6831
+    targetPort: 6831
+  - name: udp2
+    protocol: UDP
+    port: 6832
+    targetPort: 6832
+  type: ClusterIP
+
+Exponga el servicio:
+--------------------
+
+En caso de haber desplegado como "Type = ClusterIP":
+ kubectl port-forward svc/jaeger 3000:80 -n loki-stack
+
+En caso de exponer el servicio para ser alcanzado temporalmente desde las IP de los nodos del cluster:
+====================================================================================================== 
+Modifique el servicio actualmente expuesto: jaeger
+ kubectl edit svc loki-grafana -n loki-stack
+
+Cambie la línea:
+ "type: ClusterIP" a "type: NodePort"
+
+Guarde cambios oprimiendo las teclas: 
+ ESC:wq!  (ESC se oprime y se libera inmediatamente)
+
+Acceda el servicio:
+-------------------
+http://IP:16686 En caso de exponerlo por ingress o por ClusterIP
+
+http://<IP de cualquier nodo>:16686 En caso de exponerlo como NodePort
+
