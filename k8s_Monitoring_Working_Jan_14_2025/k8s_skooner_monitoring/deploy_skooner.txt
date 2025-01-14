@@ -1,0 +1,29 @@
+Instalar metrics Server:
+------------------------
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.6.1/components.yaml
+
+Instalar Skooner K8s Dashboard:
+-------------------------------
+kubectl apply -f https://raw.githubusercontent.com/skooner-k8s/skooner/master/kubernetes-skooner.yaml
+kubectl get svc --all-namespaces
+
+Editar servicio de skooner (Opcional):
+--------------------------------------
+kubectl edit svc skooner -n kube-system
+  Reemplazar ClusterIP por NodePort en caso de que desee acceder por medio de cualquiera de las IPs de los nodos del cluster
+Verifique el puerto del servicio:
+kubectl get svc --all-namespaces
+
+Despliegue un Ingress
+---------------------
+...
+
+Complementarios necesarios:
+---------------------------
+kubectl create serviceaccount skooner-sa
+kubectl create clusterrolebinding skooner-sa --clusterrole=cluster-admin --serviceaccount=default:skooner-sa
+kubectl create token skooner-sa
+
+Referencias:
+https://github.com/skooner-k8s/skooner
+
